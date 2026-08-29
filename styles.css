@@ -1,0 +1,51 @@
+.pml-code-block {
+	background: var(--code-background);
+	border-radius: var(--code-radius, 4px);
+	padding: 0.75em 1em;
+	overflow-x: auto;
+}
+
+.pml-code-block code {
+	font-family: var(--font-monospace);
+	white-space: pre;
+	background: none;
+}
+
+.pml-keyword {
+	color: var(--color-purple);
+	font-weight: 600;
+}
+
+.pml-type {
+	color: var(--color-blue);
+}
+
+.pml-string {
+	color: var(--color-green);
+}
+
+.pml-comment {
+	color: var(--text-faint);
+	font-style: italic;
+}
+
+.pml-var-local {
+	color: var(--color-orange);
+}
+
+.pml-var-global {
+	color: var(--color-red);
+	font-weight: 600;
+}
+
+.pml-uda {
+	color: var(--color-cyan);
+}
+
+.pml-number {
+	color: var(--color-orange);
+}
+
+.pml-operator {
+	color: var(--text-muted);
+}
