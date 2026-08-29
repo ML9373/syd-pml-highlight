@@ -50,6 +50,19 @@ function defaultColors(): Record<TokenKey, TokenColorSetting> {
 	return colors;
 }
 
+const CLS_TO_KEY: Record<string, TokenKey> = Object.fromEntries(
+	TOKEN_META.map((t) => [t.cls, t.key])
+) as Record<string, TokenKey>;
+
+/** Inline color for a token's class when the user enabled an override, applied directly on the element/decoration (no injected stylesheet — see Obsidian plugin guidelines). */
+function colorOverride(settings: PmlSettings, cls: string | null): string | null {
+	if (!cls) return null;
+	const key = CLS_TO_KEY[cls];
+	if (!key) return null;
+	const setting = settings.colors[key];
+	return setting.enabled ? setting.color : null;
+}
+
 const DEFAULT_SETTINGS: PmlSettings = {
 	enableLivePreview: true,
 	enableReadingMode: true,
@@ -148,7 +161,12 @@ export function renderPmlBlock(source: string, el: HTMLElement, settings: PmlSet
 		} else {
 			for (const tok of tokenizePmlLine(line, extraTypes)) {
 				if (tok.cls) {
-					code.createSpan({ cls: tok.cls, text: tok.text });
+					const color = colorOverride(settings, tok.cls);
+					code.createSpan({
+						cls: tok.cls,
+						text: tok.text,
+						attr: color ? { style: `color: ${color};` } : undefined,
+					});
 				} else {
 					code.appendText(tok.text);
 				}
@@ -189,7 +207,15 @@ function buildPmlDecorations(view: EditorView, settings: PmlSettings): Decoratio
 		let pos = line.from;
 		for (const tok of tokenizePmlLine(line.text, extraTypes)) {
 			if (tok.cls) {
-				builder.add(pos, pos + tok.text.length, Decoration.mark({ class: tok.cls }));
+				const color = colorOverride(settings, tok.cls);
+				builder.add(
+					pos,
+					pos + tok.text.length,
+					Decoration.mark({
+						class: tok.cls,
+						attributes: color ? { style: `color: ${color};` } : undefined,
+					})
+				);
 			}
 			pos += tok.text.length;
 		}
@@ -265,11 +291,12 @@ class PmlSettingTab extends PluginSettingTab {
 					})
 			);
 
-		containerEl.createEl("h3", { text: "Colors" });
-		containerEl.createEl("p", {
-			cls: "setting-item-description",
-			text: "Disabled = theme color (default, adapts to light/dark). Enable a color to lock it regardless of the theme.",
-		});
+		new Setting(containerEl)
+			.setName("Colors")
+			.setDesc(
+				"Disabled = theme color (default, adapts to light/dark). Enable a color to lock it — Live Preview updates instantly, Reading mode needs the note reopened."
+			)
+			.setHeading();
 
 		for (const t of TOKEN_META) {
 			const setting = new Setting(containerEl).setName(t.label);
@@ -278,7 +305,7 @@ class PmlSettingTab extends PluginSettingTab {
 				toggle.setValue(this.plugin.settings.colors[t.key].enabled).onChange(async (value) => {
 					this.plugin.settings.colors[t.key].enabled = value;
 					await this.plugin.saveSettings();
-					this.plugin.applyColorOverrides();
+					this.app.workspace.updateOptions();
 				})
 			);
 
@@ -286,7 +313,7 @@ class PmlSettingTab extends PluginSettingTab {
 				picker.setValue(this.plugin.settings.colors[t.key].color).onChange(async (value) => {
 					this.plugin.settings.colors[t.key].color = value;
 					await this.plugin.saveSettings();
-					this.plugin.applyColorOverrides();
+					this.app.workspace.updateOptions();
 				})
 			);
 		}
@@ -298,7 +325,7 @@ class PmlSettingTab extends PluginSettingTab {
 				button.setButtonText("Reset").onClick(async () => {
 					this.plugin.settings.colors = defaultColors();
 					await this.plugin.saveSettings();
-					this.plugin.applyColorOverrides();
+					this.app.workspace.updateOptions();
 					this.display();
 				})
 			);
@@ -307,17 +334,10 @@ class PmlSettingTab extends PluginSettingTab {
 
 export default class PmlHighlightPlugin extends Plugin {
 	settings: PmlSettings;
-	private styleEl: HTMLStyleElement;
 
 	async onload() {
 		await this.loadSettings();
 		this.addSettingTab(new PmlSettingTab(this.app, this));
-
-		this.styleEl = document.createElement("style");
-		this.styleEl.id = "syd-pml-highlight-colors";
-		document.head.appendChild(this.styleEl);
-		this.register(() => this.styleEl.remove());
-		this.applyColorOverrides();
 
 		this.registerMarkdownCodeBlockProcessor("pml", (source, el) => {
 			renderPmlBlock(source, el, this.settings);
@@ -325,20 +345,8 @@ export default class PmlHighlightPlugin extends Plugin {
 		this.registerEditorExtension(createPmlViewPlugin(this));
 	}
 
-	/** Injects/updates a <style> element with color overrides — applies instantly, no reload needed. */
-	applyColorOverrides() {
-		const rules: string[] = [];
-		for (const t of TOKEN_META) {
-			const setting = this.settings.colors[t.key];
-			if (setting.enabled) {
-				rules.push(`.${t.cls} { color: ${setting.color} !important; }`);
-			}
-		}
-		this.styleEl.textContent = rules.join("\n");
-	}
-
 	async loadSettings() {
-		const loaded = await this.loadData();
+		const loaded = (await this.loadData()) as Partial<PmlSettings> | null;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
 		this.settings.colors = Object.assign({}, defaultColors(), loaded?.colors);
 	}
