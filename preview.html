@@ -1,0 +1,191 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>syd-pml-highlight — rendering preview</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  body { margin: 0; font-family: -apple-system, sans-serif; background: #ddd; }
+  .caption { padding: 10px 16px; font-size: 13px; color: #333; background: #eee; }
+  .panels { display: flex; }
+  .panel { flex: 1; padding: 16px; }
+  .panel h2 { font-family: -apple-system, sans-serif; font-size: 14px; margin: 0 0 10px; }
+  .panel h3 { font-family: -apple-system, sans-serif; font-size: 12px; font-weight: 600; margin: 16px 0 6px; }
+
+  /* Obsidian default theme variables (light/dark), sourced from
+     https://docs.obsidian.md/Reference/CSS+variables/Foundations/Colors — do not guess these,
+     re-check the docs if Obsidian ships a new default palette. */
+  .theme-light {
+    --color-purple: #7852ee; --color-blue: #086ddd; --color-green: #08b94e;
+    --color-red: #e93147; --color-orange: #ec7500; --color-cyan: #00bfbc;
+    --text-faint: #ababab; --text-muted: #5c5c5c; --text-normal: #222222;
+    --background-primary: #ffffff; --code-background: #f6f6f6; --code-radius: 4px;
+    --font-monospace: "SFMono-Regular", Menlo, Consolas, monospace;
+    background: var(--background-primary); color: var(--text-normal);
+  }
+  .theme-dark {
+    --color-purple: #a882ff; --color-blue: #027aff; --color-green: #44cf6e;
+    --color-red: #fb464c; --color-orange: #e9973f; --color-cyan: #53dfdd;
+    --text-faint: #666666; --text-muted: #b3b3b3; --text-normal: #dadada;
+    --background-primary: #1c1c1c; --code-background: #282828; --code-radius: 4px;
+    --font-monospace: "SFMono-Regular", Menlo, Consolas, monospace;
+    background: var(--background-primary); color: var(--text-normal);
+  }
+  .pml-code-block code { font-size: 13px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="caption" id="caption">
+  <strong>syd-pml-highlight</strong> — rendering preview generated from this plugin's real
+  <code>styles.css</code> (linked, not duplicated) and a JS port of <code>src/main.ts</code>'s tokenizer.
+  Colors are Obsidian's documented default theme variables — an approximation, not a live Obsidian
+  screenshot. Re-run this after any change to the tokenizer or to <code>styles.css</code>.
+</div>
+<div class="panels">
+  <div class="panel theme-light">
+    <h2>Light theme (approximation)</h2>
+    <div id="light-blocks"></div>
+  </div>
+  <div class="panel theme-dark">
+    <h2>Dark theme (approximation)</h2>
+    <div id="dark-blocks"></div>
+  </div>
+</div>
+
+<script>
+// Keep this tokenizer in sync with tokenizePmlLine/KEYWORDS/TYPES/TOKEN_RE in src/main.ts.
+// It's a plain-JS port (this page isn't compiled), not an import, precisely so it can run
+// standalone without a build step — diff it against src/main.ts if either one changes.
+const KEYWORDS = new Set([
+  "DEFINE","METHOD","ENDMETHOD","OBJECT","ENDOBJECT","FUNCTION","ENDFUNCTION",
+  "IF","THEN","ELSEIF","ELSE","ENDIF","DO","ENDDO","WHILE","VALUES","INDICES",
+  "FROM","TO","HANDLE","ANY","ELSEHANDLE","ENDHANDLE","SKIP","BREAK","EXIT",
+  "GOLABEL","LABEL","RETURN","MEMBER","VAR","NEW","IMPORT","USING","NAMESPACE",
+  "SETUP","ENDSETUP","COLLECT","WITH","FOR","ALL","NOT","AND","OR","IS",
+  "LOCAL","GLOBAL","DELETE","CALL","CALLBACK",
+]);
+const TYPES = new Set([
+  "STRING","ARRAY","REAL","BOOLEAN","DBREF","FILE","COLLECTION","GADGET",
+  "REF","TEXT","UDA","DBWALK","PMLOBJECT",
+]);
+const EXTRA_TYPES = new Set(
+  "PIPE, EQUI, STRU, ZONE, SITE, FUNITE, ENGITE, PBSWLD, COLREL, ATTCOL, EXPCOL, SRCELE, DBVIEW, CRERUL"
+    .split(/[,\n]/).map(s => s.trim().toUpperCase()).filter(Boolean)
+);
+const TOKEN_RE = /'[^']*'|\|[^|]*\||!!\w+|!\w+|:\w+|\b\d+(?:\.\d+)?\b|[A-Za-z_]\w*|\s+|./g;
+
+function tokenizePmlLine(line) {
+  const commentIdx = line.indexOf("$*");
+  const code = commentIdx >= 0 ? line.slice(0, commentIdx) : line;
+  const comment = commentIdx >= 0 ? line.slice(commentIdx) : "";
+  const tokens = [];
+  let m;
+  TOKEN_RE.lastIndex = 0;
+  while ((m = TOKEN_RE.exec(code))) {
+    const t = m[0];
+    if (/^\s+$/.test(t)) { tokens.push([t, null]); continue; }
+    if (t.startsWith("'") || t.startsWith("|")) { tokens.push([t, "pml-string"]); continue; }
+    if (t.startsWith("!!")) { tokens.push([t, "pml-var-global"]); continue; }
+    if (t.startsWith("!")) { tokens.push([t, "pml-var-local"]); continue; }
+    if (t.startsWith(":")) { tokens.push([t, "pml-uda"]); continue; }
+    if (/^\d/.test(t)) { tokens.push([t, "pml-number"]); continue; }
+    if (/^[A-Za-z_]/.test(t)) {
+      const upper = t.toUpperCase();
+      if (KEYWORDS.has(upper)) tokens.push([t, "pml-keyword"]);
+      else if (TYPES.has(upper) || EXTRA_TYPES.has(upper)) tokens.push([t, "pml-type"]);
+      else tokens.push([t, null]);
+      continue;
+    }
+    tokens.push([t, "pml-operator"]);
+  }
+  if (comment) tokens.push([comment, "pml-comment"]);
+  return tokens;
+}
+
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function renderBlock(source) {
+  const lines = source.replace(/\n$/, "").split("\n");
+  let html = "";
+  lines.forEach((line, i) => {
+    for (const [text, cls] of tokenizePmlLine(line)) {
+      html += cls ? `<span class="${cls}">${esc(text)}</span>` : esc(text);
+    }
+    if (i < lines.length - 1) html += "\n";
+  });
+  return `<pre class="pml-code-block"><code>${html}</code></pre>`;
+}
+
+// Add/replace blocks here to cover new vocabulary as it's added to the plugin.
+const BLOCKS = [
+  {
+    title: "1. Synthetic block (every token category)",
+    source: `$* Synthetic snippet — one example of every highlighted token category
+define method .testHighlighting(!input is STRING) is BOOLEAN
+
+    !!globalCounter = !!globalCounter + 1
+    var !localValue is REAL
+    !localValue = 12.5
+
+    if !input eq 'PASS' then
+        !this.status = |All good|
+    elseif !input eq '' then
+        handle any
+            !this.status = |Empty input|
+        endhandle
+    else
+        !this.status = |Unknown|
+    endif
+
+    !pipeElement = object PIPE
+    !pipeElement.diameter = 150
+    !offset = -1
+
+    return (!localValue gt 0 and !this.:StatusFlag eq true)
+
+endmethod`,
+  },
+  {
+    title: "2. Real block — PML Snippets & Scripts (Command Window for General Users)",
+    source: `setup form !!mycommandline dialog dock
+    view .InputOutput anchor all ALPHA
+        height 20 aspect 2.0
+        channel COMMANDS
+    exit
+exit
+
+define method .mycommandline()
+    !this.formtitle = |My Commandline|
+    !this.cancelcall = '!this.CancelCall()'
+    !this.inputoutput.channel = 'REQUESTS'
+    !this.inputoutput.active = true
+endmethod
+
+define method .CancelCall()
+    kill !!mycommandline
+endmethod`,
+  },
+];
+
+for (const target of ["light-blocks", "dark-blocks"]) {
+  const el = document.getElementById(target);
+  for (const block of BLOCKS) {
+    const h3 = document.createElement("h3");
+    h3.textContent = block.title;
+    el.appendChild(h3);
+    el.insertAdjacentHTML("beforeend", renderBlock(block.source));
+  }
+}
+
+fetch("manifest.json").then(r => r.json()).then(m => {
+  document.getElementById("caption").innerHTML =
+    `<strong>${m.name} v${m.version}</strong> — rendering preview generated from this plugin's real ` +
+    `<code>styles.css</code> (linked, not duplicated) and a JS port of <code>src/main.ts</code>'s tokenizer. ` +
+    `Colors are Obsidian's documented default theme variables — an approximation, not a live Obsidian ` +
+    `screenshot. Re-run this after any change to the tokenizer or to <code>styles.css</code>.`;
+}).catch(() => {});
+</script>
+</body>
+</html>
