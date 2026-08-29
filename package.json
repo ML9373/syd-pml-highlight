@@ -1,6 +1,6 @@
 {
 	"name": "syd-pml-highlight",
-	"version": "0.3.1",
+	"version": "0.3.2",
 	"description": "Syntax highlighting for AVEVA PML/PML2 code blocks in Obsidian",
 	"main": "main.js",
 	"scripts": {

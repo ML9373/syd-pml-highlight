@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, Setting } from "obsidian";
+import { App, Plugin, PluginSettingTab, Setting, SettingDefinitionItem } from "obsidian";
 import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate } from "@codemirror/view";
 import { RangeSetBuilder } from "@codemirror/state";
 
@@ -248,87 +248,86 @@ class PmlSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
-	display(): void {
-		const { containerEl } = this;
-		containerEl.empty();
-
-		new Setting(containerEl)
-			.setName("Live Preview highlighting")
-			.setDesc("Highlight ```pml blocks while editing (Live Preview).")
-			.addToggle((toggle) =>
-				toggle.setValue(this.plugin.settings.enableLivePreview).onChange(async (value) => {
-					this.plugin.settings.enableLivePreview = value;
-					await this.plugin.saveSettings();
-					this.app.workspace.updateOptions();
-				})
-			);
-
-		new Setting(containerEl)
-			.setName("Reading mode highlighting")
-			.setDesc(
-				"Highlight ```pml blocks in Reading mode. A note already open needs to be reopened (or toggled between Reading/Editing) to reflect the change."
-			)
-			.addToggle((toggle) =>
-				toggle.setValue(this.plugin.settings.enableReadingMode).onChange(async (value) => {
-					this.plugin.settings.enableReadingMode = value;
-					await this.plugin.saveSettings();
-				})
-			);
-
-		new Setting(containerEl)
-			.setName("Extra types")
-			.setDesc(
-				"Words to color as PML types — useful for DB element types specific to your module (3D Design vs Unified Engineering). Comma or newline separated."
-			)
-			.addTextArea((text) =>
-				text
-					.setPlaceholder("PIPE, EQUI, STRU, ZONE, SITE, FUNITE, ENGITE...")
-					.setValue(this.plugin.settings.extraTypes)
-					.onChange(async (value) => {
-						this.plugin.settings.extraTypes = value;
-						await this.plugin.saveSettings();
-						this.app.workspace.updateOptions();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("Colors")
-			.setDesc(
-				"Disabled = theme color (default, adapts to light/dark). Enable a color to lock it — Live Preview updates instantly, Reading mode needs the note reopened."
-			)
-			.setHeading();
-
-		for (const t of TOKEN_META) {
-			const setting = new Setting(containerEl).setName(t.label);
-
-			setting.addToggle((toggle) =>
-				toggle.setValue(this.plugin.settings.colors[t.key].enabled).onChange(async (value) => {
-					this.plugin.settings.colors[t.key].enabled = value;
-					await this.plugin.saveSettings();
-					this.app.workspace.updateOptions();
-				})
-			);
-
-			setting.addColorPicker((picker) =>
-				picker.setValue(this.plugin.settings.colors[t.key].color).onChange(async (value) => {
-					this.plugin.settings.colors[t.key].color = value;
-					await this.plugin.saveSettings();
-					this.app.workspace.updateOptions();
-				})
-			);
-		}
-
-		new Setting(containerEl)
-			.setName("Reset colors")
-			.setDesc("Revert to theme colors for all categories.")
-			.addButton((button) =>
-				button.setButtonText("Reset").onClick(async () => {
-					this.plugin.settings.colors = defaultColors();
-					await this.plugin.saveSettings();
-					this.app.workspace.updateOptions();
-					this.display();
-				})
-			);
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		return [
+			{
+				name: "Live Preview highlighting",
+				desc: "Highlight ```pml blocks while editing (Live Preview).",
+				render: (setting: Setting) => {
+					setting.addToggle((toggle) =>
+						toggle.setValue(this.plugin.settings.enableLivePreview).onChange(async (value) => {
+							this.plugin.settings.enableLivePreview = value;
+							await this.plugin.saveSettings();
+							this.app.workspace.updateOptions();
+						})
+					);
+				},
+			},
+			{
+				name: "Reading mode highlighting",
+				desc: "Highlight ```pml blocks in Reading mode. A note already open needs to be reopened (or toggled between Reading/Editing) to reflect the change.",
+				control: { type: "toggle", key: "enableReadingMode" },
+			},
+			{
+				type: "group",
+				heading: "Colors",
+				items: [
+					{
+						name: "Theme vs custom colors",
+						desc: "Disabled = theme color (default, adapts to light/dark). Enable a color to lock it — Live Preview updates instantly, Reading mode needs the note reopened.",
+					},
+					...TOKEN_META.map((t) => ({
+						name: t.label,
+						render: (setting: Setting) => {
+							setting.addToggle((toggle) =>
+								toggle.setValue(this.plugin.settings.colors[t.key].enabled).onChange(async (value) => {
+									this.plugin.settings.colors[t.key].enabled = value;
+									await this.plugin.saveSettings();
+									this.app.workspace.updateOptions();
+								})
+							);
+							setting.addColorPicker((picker) =>
+								picker.setValue(this.plugin.settings.colors[t.key].color).onChange(async (value) => {
+									this.plugin.settings.colors[t.key].color = value;
+									await this.plugin.saveSettings();
+									this.app.workspace.updateOptions();
+								})
+							);
+						},
+					})),
+					{
+						name: "Reset colors",
+						desc: "Revert to theme colors for all categories.",
+						render: (setting: Setting) => {
+							setting.addButton((button) =>
+								button.setButtonText("Reset").onClick(async () => {
+									this.plugin.settings.colors = defaultColors();
+									await this.plugin.saveSettings();
+									this.app.workspace.updateOptions();
+									this.update();
+								})
+							);
+						},
+					},
+				],
+			},
+			{
+				name: "Extra types",
+				desc: "Words to color as PML types — useful for DB element types specific to your module (3D Design vs Unified Engineering). Comma or newline separated.",
+				render: (setting: Setting) => {
+					setting.addTextArea((text) =>
+						text
+							.setPlaceholder("PIPE, EQUI, STRU, ZONE, SITE, FUNITE, ENGITE...")
+							.setValue(this.plugin.settings.extraTypes)
+							.onChange(async (value) => {
+								this.plugin.settings.extraTypes = value;
+								await this.plugin.saveSettings();
+								this.app.workspace.updateOptions();
+							})
+					);
+				},
+			},
+		];
 	}
 }
 
