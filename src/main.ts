@@ -33,15 +33,15 @@ interface PmlSettings {
 
 /** cls = CSS class already styled (theme-aware) in styles.css; defaultColor = starting swatch value for the picker, not a claim about the live theme's resolved color. */
 const TOKEN_META: { key: TokenKey; cls: string; label: string; defaultColor: string }[] = [
-	{ key: "keyword", cls: "pml-keyword", label: "Mots-clés (define, if, do...)", defaultColor: "#a626a4" },
+	{ key: "keyword", cls: "pml-keyword", label: "Keywords (define, if, do...)", defaultColor: "#a626a4" },
 	{ key: "type", cls: "pml-type", label: "Types (STRING, ARRAY, PIPE...)", defaultColor: "#4078f2" },
-	{ key: "string", cls: "pml-string", label: "Chaînes ('...', |...|)", defaultColor: "#50a14f" },
-	{ key: "comment", cls: "pml-comment", label: "Commentaires ($* ...)", defaultColor: "#a0a0a0" },
-	{ key: "varLocal", cls: "pml-var-local", label: "Variables locales (!var)", defaultColor: "#c18401" },
-	{ key: "varGlobal", cls: "pml-var-global", label: "Variables globales (!!var)", defaultColor: "#e45649" },
-	{ key: "uda", cls: "pml-uda", label: "UDA (:attribut)", defaultColor: "#0184bc" },
-	{ key: "number", cls: "pml-number", label: "Nombres", defaultColor: "#c18401" },
-	{ key: "operator", cls: "pml-operator", label: "Opérateurs", defaultColor: "#888888" },
+	{ key: "string", cls: "pml-string", label: "Strings ('...', |...|)", defaultColor: "#50a14f" },
+	{ key: "comment", cls: "pml-comment", label: "Comments ($* ...)", defaultColor: "#a0a0a0" },
+	{ key: "varLocal", cls: "pml-var-local", label: "Local variables (!var)", defaultColor: "#c18401" },
+	{ key: "varGlobal", cls: "pml-var-global", label: "Global variables (!!var)", defaultColor: "#e45649" },
+	{ key: "uda", cls: "pml-uda", label: "UDA (:attribute)", defaultColor: "#0184bc" },
+	{ key: "number", cls: "pml-number", label: "Numbers", defaultColor: "#c18401" },
+	{ key: "operator", cls: "pml-operator", label: "Operators", defaultColor: "#888888" },
 ];
 
 function defaultColors(): Record<TokenKey, TokenColorSetting> {
@@ -228,7 +228,7 @@ class PmlSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Live Preview highlighting")
-			.setDesc("Colorer les blocs ```pml en mode édition (Live Preview).")
+			.setDesc("Highlight ```pml blocks while editing (Live Preview).")
 			.addToggle((toggle) =>
 				toggle.setValue(this.plugin.settings.enableLivePreview).onChange(async (value) => {
 					this.plugin.settings.enableLivePreview = value;
@@ -240,7 +240,7 @@ class PmlSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Reading mode highlighting")
 			.setDesc(
-				"Colorer les blocs ```pml en mode Lecture. Une note déjà ouverte doit être rouverte (ou basculée Lecture/Édition) pour refléter le changement."
+				"Highlight ```pml blocks in Reading mode. A note already open needs to be reopened (or toggled between Reading/Editing) to reflect the change."
 			)
 			.addToggle((toggle) =>
 				toggle.setValue(this.plugin.settings.enableReadingMode).onChange(async (value) => {
@@ -250,9 +250,9 @@ class PmlSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Types supplémentaires")
+			.setName("Extra types")
 			.setDesc(
-				"Mots à colorer comme des types PML — utile pour les éléments DB propres à ton module (3D Design vs Unified Engineering). Séparés par des virgules ou des retours à la ligne."
+				"Words to color as PML types — useful for DB element types specific to your module (3D Design vs Unified Engineering). Comma or newline separated."
 			)
 			.addTextArea((text) =>
 				text
@@ -265,10 +265,10 @@ class PmlSettingTab extends PluginSettingTab {
 					})
 			);
 
-		containerEl.createEl("h3", { text: "Couleurs" });
+		containerEl.createEl("h3", { text: "Colors" });
 		containerEl.createEl("p", {
 			cls: "setting-item-description",
-			text: "Désactivé = couleur du thème (par défaut, s'adapte au clair/sombre). Active une couleur pour la figer, quel que soit le thème.",
+			text: "Disabled = theme color (default, adapts to light/dark). Enable a color to lock it regardless of the theme.",
 		});
 
 		for (const t of TOKEN_META) {
@@ -292,10 +292,10 @@ class PmlSettingTab extends PluginSettingTab {
 		}
 
 		new Setting(containerEl)
-			.setName("Réinitialiser les couleurs")
-			.setDesc("Revenir aux couleurs du thème pour toutes les catégories.")
+			.setName("Reset colors")
+			.setDesc("Revert to theme colors for all categories.")
 			.addButton((button) =>
-				button.setButtonText("Réinitialiser").onClick(async () => {
+				button.setButtonText("Reset").onClick(async () => {
 					this.plugin.settings.colors = defaultColors();
 					await this.plugin.saveSettings();
 					this.plugin.applyColorOverrides();
