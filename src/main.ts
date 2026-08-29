@@ -9,8 +9,9 @@ import {
 	lineNumbers,
 	highlightActiveLine,
 } from "@codemirror/view";
-import { EditorState, RangeSetBuilder } from "@codemirror/state";
+import { EditorState, RangeSetBuilder, Text } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { foldService, foldGutter, foldKeymap } from "@codemirror/language";
 
 const PML_FILE_VIEW_TYPE = "pml-file-view";
 const PML_FILE_EXTENSIONS = ["pml", "pmlobj", "pmlfnc", "pmlfrm", "pmlmac", "pmlcmd"];
@@ -41,6 +42,8 @@ interface PmlSettings {
 	enableReadingMode: boolean;
 	/** Highlighting for raw .pml/.pmlobj/.pmlfnc/.pmlfrm/.pmlmac/.pmlcmd files opened directly (not fenced blocks). */
 	enableFileHighlighting: boolean;
+	/** Code folding for if/do/define/setup form/handle blocks, in fenced blocks and raw files alike. */
+	enableFolding: boolean;
 	/** Comma/newline-separated extra words to color as PML types (DB element types vary by module: 3D Design vs Unified Engineering). */
 	extraTypes: string;
 	colors: Record<TokenKey, TokenColorSetting>;
@@ -83,6 +86,7 @@ const DEFAULT_SETTINGS: PmlSettings = {
 	enableLivePreview: true,
 	enableReadingMode: true,
 	enableFileHighlighting: true,
+	enableFolding: true,
 	extraTypes: "PIPE, EQUI, STRU, ZONE, SITE, FUNITE, ENGITE, PBSWLD, COLREL, ATTCOL, EXPCOL, SRCELE, DBVIEW, CRERUL",
 	colors: defaultColors(),
 };
@@ -264,6 +268,73 @@ function createPmlViewPlugin(plugin: PmlHighlightPlugin, wholeFile = false) {
 }
 
 /**
+ * Block pairs deliberately scoped to the unambiguous ones: `if/endif`, `do/enddo`,
+ * `define method|function|object/end...`, `setup form/endsetup`, `handle/endhandle`.
+ * `elseif`/`else`/`elsehandle` are continuations, not openers or closers (excluded by
+ * the leading-anchor `^` — they never start with "if"/"handle").
+ *
+ * `setup command ... exit` and gadget blocks (`view ... exit`, `frame ... exit`) are
+ * deliberately NOT folded here: `exit` is a generic terminator shared by several
+ * different openers, so matching it correctly would need full construct-tracking —
+ * out of scope for this pass, and a wrong fold range is worse than no fold.
+ */
+const FOLD_OPEN_RE = /^(if|do|define\s+(method|function|object)|setup\s+form|handle)\b/i;
+const FOLD_CLOSE_RE = /^(endif|enddo|endmethod|endfunction|endobject|endsetup|endhandle)\b/i;
+const FOLD_CLOSE_ANYWHERE_RE = /\b(endif|enddo|endmethod|endfunction|endobject|endsetup|endhandle)\b/i;
+
+function isPmlFenceStart(text: string): boolean {
+	return /^```+\s*pml\s*$/i.test(text.trim());
+}
+function isPmlFenceEnd(text: string): boolean {
+	return /^```+\s*$/.test(text.trim());
+}
+
+/** Whether `lineNumber` sits inside a ```pml fence, by scanning from the top — mirrors buildPmlDecorations's fence tracking. */
+function isInsidePmlFence(doc: Text, lineNumber: number): boolean {
+	let inBlock = false;
+	for (let i = 1; i < lineNumber; i++) {
+		const text = doc.line(i).text;
+		if (!inBlock) {
+			if (isPmlFenceStart(text)) inBlock = true;
+		} else if (isPmlFenceEnd(text)) {
+			inBlock = false;
+		}
+	}
+	return inBlock;
+}
+
+function createPmlFoldService(plugin: PmlHighlightPlugin, wholeFile: boolean) {
+	return foldService.of((state, lineStart) => {
+		if (!plugin.settings.enableFolding) return null;
+		const startLine = state.doc.lineAt(lineStart);
+		if (!wholeFile && !isInsidePmlFence(state.doc, startLine.number)) return null;
+
+		const trimmed = startLine.text.trim();
+		if (!FOLD_OPEN_RE.test(trimmed)) return null;
+		if (FOLD_CLOSE_ANYWHERE_RE.test(trimmed)) return null; // opener and closer on the same line — nothing to fold
+
+		let depth = 1;
+		let line = startLine;
+		while (line.number < state.doc.lines) {
+			line = state.doc.line(line.number + 1);
+			const t = line.text.trim();
+			if (!wholeFile && isPmlFenceEnd(t)) return null; // fence ended before a matching closer — malformed, don't fold
+			if (FOLD_OPEN_RE.test(t) && !FOLD_CLOSE_ANYWHERE_RE.test(t)) {
+				depth++;
+			} else if (FOLD_CLOSE_RE.test(t)) {
+				depth--;
+				if (depth === 0) {
+					if (line.number <= startLine.number + 1) return null;
+					const prevLine = state.doc.line(line.number - 1);
+					return { from: startLine.to, to: prevLine.to };
+				}
+			}
+		}
+		return null;
+	});
+}
+
+/**
  * Editable view for raw .pml/.pmlobj/.pmlfnc/.pmlfrm/.pmlmac/.pmlcmd files opened directly
  * (not embedded in a Markdown note). A minimal CodeMirror 6 editor — history, default
  * keybindings, line numbers — plus the same highlighting decorator used for fenced blocks,
@@ -293,10 +364,12 @@ class PmlFileView extends TextFileView {
 				doc: this.data,
 				extensions: [
 					lineNumbers(),
+					foldGutter(),
 					highlightActiveLine(),
 					history(),
-					keymap.of([...defaultKeymap, ...historyKeymap]),
+					keymap.of([...defaultKeymap, ...historyKeymap, ...foldKeymap]),
 					createPmlViewPlugin(this.plugin, true),
+					createPmlFoldService(this.plugin, true),
 					EditorView.lineWrapping,
 					EditorView.updateListener.of((update) => {
 						if (update.docChanged) this.requestSave();
@@ -367,6 +440,11 @@ class PmlSettingTab extends PluginSettingTab {
 				name: "Raw PML file highlighting",
 				desc: "Highlight .pml, .pmlobj, .pmlfnc, .pmlfrm, .pmlmac and .pmlcmd files opened directly (not just fenced blocks in notes). Requires reopening any already-open file to apply.",
 				control: { type: "toggle", key: "enableFileHighlighting" },
+			},
+			{
+				name: "Code folding",
+				desc: "Fold if/endif, do/enddo, define method|function|object, setup form, and handle/endhandle blocks. Not covered: setup command and gadget blocks, which close with a generic 'exit' shared by several constructs.",
+				control: { type: "toggle", key: "enableFolding" },
 			},
 			{
 				type: "group",
@@ -441,7 +519,7 @@ export default class PmlHighlightPlugin extends Plugin {
 		this.registerMarkdownCodeBlockProcessor("pml", (source, el) => {
 			renderPmlBlock(source, el, this.settings);
 		});
-		this.registerEditorExtension(createPmlViewPlugin(this));
+		this.registerEditorExtension([createPmlViewPlugin(this), createPmlFoldService(this, false)]);
 
 		this.registerView(PML_FILE_VIEW_TYPE, (leaf) => new PmlFileView(leaf, this));
 		try {
