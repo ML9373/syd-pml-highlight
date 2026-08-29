@@ -65,9 +65,10 @@ function defaultColors(): Record<TokenKey, TokenColorSetting> {
 	return colors;
 }
 
-const CLS_TO_KEY: Record<string, TokenKey> = Object.fromEntries(
-	TOKEN_META.map((t) => [t.cls, t.key])
-) as Record<string, TokenKey>;
+const CLS_TO_KEY: Record<string, TokenKey> = {};
+for (const t of TOKEN_META) {
+	CLS_TO_KEY[t.cls] = t.key;
+}
 
 /** Inline color for a token's class when the user enabled an override, applied directly on the element/decoration (no injected stylesheet — see Obsidian plugin guidelines). */
 function colorOverride(settings: PmlSettings, cls: string | null): string | null {
@@ -445,13 +446,9 @@ export default class PmlHighlightPlugin extends Plugin {
 		this.registerView(PML_FILE_VIEW_TYPE, (leaf) => new PmlFileView(leaf, this));
 		try {
 			this.registerExtensions(PML_FILE_EXTENSIONS, PML_FILE_VIEW_TYPE);
-		} catch (e) {
+		} catch {
 			// Another plugin may already own one of these extensions — the core editor still opens the file.
 		}
-	}
-
-	onunload() {
-		this.app.workspace.detachLeavesOfType(PML_FILE_VIEW_TYPE);
 	}
 
 	async loadSettings() {
