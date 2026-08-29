@@ -277,6 +277,12 @@ function createPmlViewPlugin(plugin: PmlHighlightPlugin, wholeFile = false) {
  * deliberately NOT folded here: `exit` is a generic terminator shared by several
  * different openers, so matching it correctly would need full construct-tracking —
  * out of scope for this pass, and a wrong fold range is worse than no fold.
+ *
+ * In practice this also limits `setup form` folding: a form with nested gadget
+ * containers (view/frame/container) commonly closes the outer `setup form` with
+ * `exit` too, not `endsetup` (confirmed in this repo's own TestHighlighting.pmlfrm
+ * fixture) — only `endsetup`-terminated forms fold. `define method`/`function`/`object`
+ * inside such a file are unaffected and still fold normally.
  */
 const FOLD_OPEN_RE = /^(if|do|define\s+(method|function|object)|setup\s+form|handle)\b/i;
 const FOLD_CLOSE_RE = /^(endif|enddo|endmethod|endfunction|endobject|endsetup|endhandle)\b/i;
