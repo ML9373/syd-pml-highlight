@@ -23,7 +23,7 @@ Not a language server: no autocompletion, no error diagnostics, no folding aware
 **Manual install**:
 
 ```bash
-npm install
+npm install --legacy-peer-deps
 npm run build
 ```
 
@@ -32,9 +32,11 @@ Copy `main.js`, `manifest.json`, `styles.css` into `<vault>/.obsidian/plugins/sy
 ## Dev
 
 ```bash
-npm install
+npm install --legacy-peer-deps
 npm run dev   # esbuild watch mode
 ```
+
+`--legacy-peer-deps` is required: the `obsidian` devDependency's own peer dependency on `@codemirror/state` is newer than the version this repo pins directly, and plain `npm install` refuses to resolve that conflict (ERESOLVE). It's harmless here — Obsidian provides the real CodeMirror modules at runtime (see `esbuild.config.mjs`'s `external` list); these devDependencies only exist for TypeScript's type-checking.
 
 ### Rendering preview
 
