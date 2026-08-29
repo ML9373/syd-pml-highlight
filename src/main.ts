@@ -7,17 +7,54 @@ interface Token {
 	cls: string | null;
 }
 
+type TokenKey =
+	| "keyword"
+	| "type"
+	| "string"
+	| "comment"
+	| "varLocal"
+	| "varGlobal"
+	| "uda"
+	| "number"
+	| "operator";
+
+interface TokenColorSetting {
+	enabled: boolean;
+	color: string;
+}
+
 interface PmlSettings {
 	enableLivePreview: boolean;
 	enableReadingMode: boolean;
 	/** Comma/newline-separated extra words to color as PML types (DB element types vary by module: 3D Design vs Unified Engineering). */
 	extraTypes: string;
+	colors: Record<TokenKey, TokenColorSetting>;
+}
+
+/** cls = CSS class already styled (theme-aware) in styles.css; defaultColor = starting swatch value for the picker, not a claim about the live theme's resolved color. */
+const TOKEN_META: { key: TokenKey; cls: string; label: string; defaultColor: string }[] = [
+	{ key: "keyword", cls: "pml-keyword", label: "Mots-clés (define, if, do...)", defaultColor: "#a626a4" },
+	{ key: "type", cls: "pml-type", label: "Types (STRING, ARRAY, PIPE...)", defaultColor: "#4078f2" },
+	{ key: "string", cls: "pml-string", label: "Chaînes ('...', |...|)", defaultColor: "#50a14f" },
+	{ key: "comment", cls: "pml-comment", label: "Commentaires ($* ...)", defaultColor: "#a0a0a0" },
+	{ key: "varLocal", cls: "pml-var-local", label: "Variables locales (!var)", defaultColor: "#c18401" },
+	{ key: "varGlobal", cls: "pml-var-global", label: "Variables globales (!!var)", defaultColor: "#e45649" },
+	{ key: "uda", cls: "pml-uda", label: "UDA (:attribut)", defaultColor: "#0184bc" },
+	{ key: "number", cls: "pml-number", label: "Nombres", defaultColor: "#c18401" },
+	{ key: "operator", cls: "pml-operator", label: "Opérateurs", defaultColor: "#888888" },
+];
+
+function defaultColors(): Record<TokenKey, TokenColorSetting> {
+	const colors = {} as Record<TokenKey, TokenColorSetting>;
+	for (const t of TOKEN_META) colors[t.key] = { enabled: false, color: t.defaultColor };
+	return colors;
 }
 
 const DEFAULT_SETTINGS: PmlSettings = {
 	enableLivePreview: true,
 	enableReadingMode: true,
 	extraTypes: "PIPE, EQUI, STRU, ZONE, SITE, FUNITE, ENGITE, PBSWLD, COLREL, ATTCOL, EXPCOL, SRCELE, DBVIEW, CRERUL",
+	colors: defaultColors(),
 };
 
 const KEYWORDS = new Set([
@@ -227,15 +264,60 @@ class PmlSettingTab extends PluginSettingTab {
 						this.app.workspace.updateOptions();
 					})
 			);
+
+		containerEl.createEl("h3", { text: "Couleurs" });
+		containerEl.createEl("p", {
+			cls: "setting-item-description",
+			text: "Désactivé = couleur du thème (par défaut, s'adapte au clair/sombre). Active une couleur pour la figer, quel que soit le thème.",
+		});
+
+		for (const t of TOKEN_META) {
+			const setting = new Setting(containerEl).setName(t.label);
+
+			setting.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.colors[t.key].enabled).onChange(async (value) => {
+					this.plugin.settings.colors[t.key].enabled = value;
+					await this.plugin.saveSettings();
+					this.plugin.applyColorOverrides();
+				})
+			);
+
+			setting.addColorPicker((picker) =>
+				picker.setValue(this.plugin.settings.colors[t.key].color).onChange(async (value) => {
+					this.plugin.settings.colors[t.key].color = value;
+					await this.plugin.saveSettings();
+					this.plugin.applyColorOverrides();
+				})
+			);
+		}
+
+		new Setting(containerEl)
+			.setName("Réinitialiser les couleurs")
+			.setDesc("Revenir aux couleurs du thème pour toutes les catégories.")
+			.addButton((button) =>
+				button.setButtonText("Réinitialiser").onClick(async () => {
+					this.plugin.settings.colors = defaultColors();
+					await this.plugin.saveSettings();
+					this.plugin.applyColorOverrides();
+					this.display();
+				})
+			);
 	}
 }
 
 export default class PmlHighlightPlugin extends Plugin {
 	settings: PmlSettings;
+	private styleEl: HTMLStyleElement;
 
 	async onload() {
 		await this.loadSettings();
 		this.addSettingTab(new PmlSettingTab(this.app, this));
+
+		this.styleEl = document.createElement("style");
+		this.styleEl.id = "syd-pml-highlight-colors";
+		document.head.appendChild(this.styleEl);
+		this.register(() => this.styleEl.remove());
+		this.applyColorOverrides();
 
 		this.registerMarkdownCodeBlockProcessor("pml", (source, el) => {
 			renderPmlBlock(source, el, this.settings);
@@ -243,8 +325,22 @@ export default class PmlHighlightPlugin extends Plugin {
 		this.registerEditorExtension(createPmlViewPlugin(this));
 	}
 
+	/** Injects/updates a <style> element with color overrides — applies instantly, no reload needed. */
+	applyColorOverrides() {
+		const rules: string[] = [];
+		for (const t of TOKEN_META) {
+			const setting = this.settings.colors[t.key];
+			if (setting.enabled) {
+				rules.push(`.${t.cls} { color: ${setting.color} !important; }`);
+			}
+		}
+		this.styleEl.textContent = rules.join("\n");
+	}
+
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const loaded = await this.loadData();
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
+		this.settings.colors = Object.assign({}, defaultColors(), loaded?.colors);
 	}
 
 	async saveSettings() {
