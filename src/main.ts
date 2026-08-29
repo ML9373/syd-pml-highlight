@@ -1,4 +1,4 @@
-import { Plugin } from "obsidian";
+import { App, Plugin, PluginSettingTab, Setting } from "obsidian";
 import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate } from "@codemirror/view";
 import { RangeSetBuilder } from "@codemirror/state";
 
@@ -6,6 +6,19 @@ interface Token {
 	text: string;
 	cls: string | null;
 }
+
+interface PmlSettings {
+	enableLivePreview: boolean;
+	enableReadingMode: boolean;
+	/** Comma/newline-separated extra words to color as PML types (DB element types vary by module: 3D Design vs Unified Engineering). */
+	extraTypes: string;
+}
+
+const DEFAULT_SETTINGS: PmlSettings = {
+	enableLivePreview: true,
+	enableReadingMode: true,
+	extraTypes: "PIPE, EQUI, STRU, ZONE, SITE, FUNITE, ENGITE, PBSWLD, COLREL, ATTCOL, EXPCOL, SRCELE, DBVIEW, CRERUL",
+};
 
 const KEYWORDS = new Set([
 	"DEFINE", "METHOD", "ENDMETHOD", "OBJECT", "ENDOBJECT", "FUNCTION", "ENDFUNCTION",
@@ -21,6 +34,12 @@ const TYPES = new Set([
 	"REF", "TEXT", "UDA", "DBWALK", "PMLOBJECT",
 ]);
 
+function parseExtraTypes(raw: string): Set<string> {
+	return new Set(
+		raw.split(/[,\n]/).map((s) => s.trim().toUpperCase()).filter(Boolean)
+	);
+}
+
 // Order matters: strings, then !!global / !local, then :uda, then numbers, then words, then whitespace/other.
 const TOKEN_RE = /'[^']*'|\|[^|]*\||!!\w+|!\w+|:\w+|\b\d+(?:\.\d+)?\b|[A-Za-z_]\w*|\s+|./g;
 
@@ -29,7 +48,7 @@ const TOKEN_RE = /'[^']*'|\|[^|]*\||!!\w+|!\w+|:\w+|\b\d+(?:\.\d+)?\b|[A-Za-z_]\
  * `$*` starts a line comment, `'...'` / `|...|` are single-line string literals.
  * A per-line tokenizer is therefore sufficient — no cross-line state needed.
  */
-export function tokenizePmlLine(line: string): Token[] {
+export function tokenizePmlLine(line: string, extraTypes: Set<string> = new Set()): Token[] {
 	const commentIdx = line.indexOf("$*");
 	const code = commentIdx >= 0 ? line.slice(0, commentIdx) : line;
 	const comment = commentIdx >= 0 ? line.slice(commentIdx) : "";
@@ -67,7 +86,7 @@ export function tokenizePmlLine(line: string): Token[] {
 			const upper = t.toUpperCase();
 			if (KEYWORDS.has(upper)) {
 				tokens.push({ text: t, cls: "pml-keyword" });
-			} else if (TYPES.has(upper)) {
+			} else if (TYPES.has(upper) || extraTypes.has(upper)) {
 				tokens.push({ text: t, cls: "pml-type" });
 			} else {
 				tokens.push({ text: t, cls: null });
@@ -81,16 +100,21 @@ export function tokenizePmlLine(line: string): Token[] {
 }
 
 /** Reading mode: ```pml fenced code block processor. */
-export function renderPmlBlock(source: string, el: HTMLElement) {
+export function renderPmlBlock(source: string, el: HTMLElement, settings: PmlSettings) {
 	const pre = el.createEl("pre", { cls: "pml-code-block" });
 	const code = pre.createEl("code");
 	const lines = source.replace(/\n$/, "").split("\n");
+	const extraTypes = settings.enableReadingMode ? parseExtraTypes(settings.extraTypes) : new Set<string>();
 	lines.forEach((line, i) => {
-		for (const tok of tokenizePmlLine(line)) {
-			if (tok.cls) {
-				code.createSpan({ cls: tok.cls, text: tok.text });
-			} else {
-				code.appendText(tok.text);
+		if (!settings.enableReadingMode) {
+			code.appendText(line);
+		} else {
+			for (const tok of tokenizePmlLine(line, extraTypes)) {
+				if (tok.cls) {
+					code.createSpan({ cls: tok.cls, text: tok.text });
+				} else {
+					code.appendText(tok.text);
+				}
 			}
 		}
 		if (i < lines.length - 1) code.appendText("\n");
@@ -104,8 +128,11 @@ export function renderPmlBlock(source: string, el: HTMLElement) {
  * which PML isn't. Scanning fence markers directly is simpler and predictable,
  * at the cost of code-block-aware folding/indent (acceptable for v0.1 coloring).
  */
-function buildPmlDecorations(view: EditorView): DecorationSet {
+function buildPmlDecorations(view: EditorView, settings: PmlSettings): DecorationSet {
 	const builder = new RangeSetBuilder<Decoration>();
+	if (!settings.enableLivePreview) return builder.finish();
+
+	const extraTypes = parseExtraTypes(settings.extraTypes);
 	const doc = view.state.doc;
 	let inBlock = false;
 
@@ -123,7 +150,7 @@ function buildPmlDecorations(view: EditorView): DecorationSet {
 		}
 
 		let pos = line.from;
-		for (const tok of tokenizePmlLine(line.text)) {
+		for (const tok of tokenizePmlLine(line.text, extraTypes)) {
 			if (tok.cls) {
 				builder.add(pos, pos + tok.text.length, Decoration.mark({ class: tok.cls }));
 			}
@@ -133,26 +160,94 @@ function buildPmlDecorations(view: EditorView): DecorationSet {
 	return builder.finish();
 }
 
-const pmlViewPlugin = ViewPlugin.fromClass(
-	class {
-		decorations: DecorationSet;
-		constructor(view: EditorView) {
-			this.decorations = buildPmlDecorations(view);
-		}
-		update(update: ViewUpdate) {
-			if (update.docChanged || update.viewportChanged) {
-				this.decorations = buildPmlDecorations(update.view);
+function createPmlViewPlugin(plugin: PmlHighlightPlugin) {
+	return ViewPlugin.fromClass(
+		class {
+			decorations: DecorationSet;
+			constructor(view: EditorView) {
+				this.decorations = buildPmlDecorations(view, plugin.settings);
 			}
-		}
-	},
-	{ decorations: (v) => v.decorations }
-);
+			update(update: ViewUpdate) {
+				if (update.docChanged || update.viewportChanged) {
+					this.decorations = buildPmlDecorations(update.view, plugin.settings);
+				}
+			}
+		},
+		{ decorations: (v) => v.decorations }
+	);
+}
+
+class PmlSettingTab extends PluginSettingTab {
+	plugin: PmlHighlightPlugin;
+
+	constructor(app: App, plugin: PmlHighlightPlugin) {
+		super(app, plugin);
+		this.plugin = plugin;
+	}
+
+	display(): void {
+		const { containerEl } = this;
+		containerEl.empty();
+
+		new Setting(containerEl)
+			.setName("Live Preview highlighting")
+			.setDesc("Colorer les blocs ```pml en mode édition (Live Preview).")
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.enableLivePreview).onChange(async (value) => {
+					this.plugin.settings.enableLivePreview = value;
+					await this.plugin.saveSettings();
+					this.app.workspace.updateOptions();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName("Reading mode highlighting")
+			.setDesc(
+				"Colorer les blocs ```pml en mode Lecture. Une note déjà ouverte doit être rouverte (ou basculée Lecture/Édition) pour refléter le changement."
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.enableReadingMode).onChange(async (value) => {
+					this.plugin.settings.enableReadingMode = value;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName("Types supplémentaires")
+			.setDesc(
+				"Mots à colorer comme des types PML — utile pour les éléments DB propres à ton module (3D Design vs Unified Engineering). Séparés par des virgules ou des retours à la ligne."
+			)
+			.addTextArea((text) =>
+				text
+					.setPlaceholder("PIPE, EQUI, STRU, ZONE, SITE, FUNITE, ENGITE...")
+					.setValue(this.plugin.settings.extraTypes)
+					.onChange(async (value) => {
+						this.plugin.settings.extraTypes = value;
+						await this.plugin.saveSettings();
+						this.app.workspace.updateOptions();
+					})
+			);
+	}
+}
 
 export default class PmlHighlightPlugin extends Plugin {
+	settings: PmlSettings;
+
 	async onload() {
+		await this.loadSettings();
+		this.addSettingTab(new PmlSettingTab(this.app, this));
+
 		this.registerMarkdownCodeBlockProcessor("pml", (source, el) => {
-			renderPmlBlock(source, el);
+			renderPmlBlock(source, el, this.settings);
 		});
-		this.registerEditorExtension(pmlViewPlugin);
+		this.registerEditorExtension(createPmlViewPlugin(this));
+	}
+
+	async loadSettings() {
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+	}
+
+	async saveSettings() {
+		await this.saveData(this.settings);
 	}
 }
