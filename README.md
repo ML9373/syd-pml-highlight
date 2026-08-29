@@ -1,6 +1,6 @@
 # PML Syntax Highlighting for Obsidian
 
-Colors AVEVA PML/PML2 code blocks (` ```pml `) in Obsidian: Reading mode and Live Preview.
+Colors AVEVA PML/PML2 code: ` ```pml ` fenced blocks in notes (Reading mode and Live Preview), and raw `.pml`, `.pmlobj`, `.pmlfnc`, `.pmlfrm`, `.pmlmac`, `.pmlcmd` files opened directly.
 
 ## Coverage
 
@@ -11,7 +11,8 @@ Colors AVEVA PML/PML2 code blocks (` ```pml `) in Obsidian: Reading mode and Liv
 - Keywords (`define`, `method`, `endmethod`, `if/then/endif`, `do/enddo`, `handle any/endhandle`, …)
 - Built-in types (`STRING`, `ARRAY`, `REAL`, `DBREF`, …), plus user-defined extra type words (module-specific DB elements)
 - Numbers
-- Settings tab: toggle Reading mode / Live Preview independently, per-category color overrides
+- Raw `.pml`-family files open in their own editable view (line numbers, undo/redo, same highlighting) — no more plain-text fallback for these extensions
+- Settings tab: toggle Reading mode / Live Preview / raw-file highlighting independently, per-category color overrides
 
 Not a language server: no autocompletion, no error diagnostics, no folding awareness of PML blocks. Purely visual coloring.
 

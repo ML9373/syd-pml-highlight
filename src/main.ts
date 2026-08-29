@@ -1,6 +1,19 @@
-import { App, Plugin, PluginSettingTab, Setting, SettingDefinitionItem } from "obsidian";
-import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate } from "@codemirror/view";
-import { RangeSetBuilder } from "@codemirror/state";
+import { App, Plugin, PluginSettingTab, Setting, SettingDefinitionItem, TextFileView, WorkspaceLeaf } from "obsidian";
+import {
+	EditorView,
+	Decoration,
+	DecorationSet,
+	ViewPlugin,
+	ViewUpdate,
+	keymap,
+	lineNumbers,
+	highlightActiveLine,
+} from "@codemirror/view";
+import { EditorState, RangeSetBuilder } from "@codemirror/state";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+
+const PML_FILE_VIEW_TYPE = "pml-file-view";
+const PML_FILE_EXTENSIONS = ["pml", "pmlobj", "pmlfnc", "pmlfrm", "pmlmac", "pmlcmd"];
 
 interface Token {
 	text: string;
@@ -26,6 +39,8 @@ interface TokenColorSetting {
 interface PmlSettings {
 	enableLivePreview: boolean;
 	enableReadingMode: boolean;
+	/** Highlighting for raw .pml/.pmlobj/.pmlfnc/.pmlfrm/.pmlmac/.pmlcmd files opened directly (not fenced blocks). */
+	enableFileHighlighting: boolean;
 	/** Comma/newline-separated extra words to color as PML types (DB element types vary by module: 3D Design vs Unified Engineering). */
 	extraTypes: string;
 	colors: Record<TokenKey, TokenColorSetting>;
@@ -66,6 +81,7 @@ function colorOverride(settings: PmlSettings, cls: string | null): string | null
 const DEFAULT_SETTINGS: PmlSettings = {
 	enableLivePreview: true,
 	enableReadingMode: true,
+	enableFileHighlighting: true,
 	extraTypes: "PIPE, EQUI, STRU, ZONE, SITE, FUNITE, ENGITE, PBSWLD, COLREL, ATTCOL, EXPCOL, SRCELE, DBVIEW, CRERUL",
 	colors: defaultColors(),
 };
@@ -177,31 +193,37 @@ export function renderPmlBlock(source: string, el: HTMLElement, settings: PmlSet
 }
 
 /**
- * Live Preview: line-scanning decorator for ```pml fenced blocks.
+ * Live Preview: line-scanning decorator for ```pml fenced blocks (`wholeFile: false`)
+ * or for an entire raw .pml-family file opened in its own view (`wholeFile: true`,
+ * every line is PML, there's no fence to detect).
+ *
  * Deliberately not a full CodeMirror language/Lezer grammar — Obsidian's live
  * preview only auto-colors fenced languages present in @codemirror/language-data,
  * which PML isn't. Scanning fence markers directly is simpler and predictable,
  * at the cost of code-block-aware folding/indent (acceptable for v0.1 coloring).
  */
-function buildPmlDecorations(view: EditorView, settings: PmlSettings): DecorationSet {
+function buildPmlDecorations(view: EditorView, settings: PmlSettings, wholeFile = false): DecorationSet {
 	const builder = new RangeSetBuilder<Decoration>();
-	if (!settings.enableLivePreview) return builder.finish();
+	if (!wholeFile && !settings.enableLivePreview) return builder.finish();
+	if (wholeFile && !settings.enableFileHighlighting) return builder.finish();
 
 	const extraTypes = parseExtraTypes(settings.extraTypes);
 	const doc = view.state.doc;
-	let inBlock = false;
+	let inBlock = wholeFile;
 
 	for (let i = 1; i <= doc.lines; i++) {
 		const line = doc.line(i);
-		const trimmed = line.text.trim();
 
-		if (!inBlock) {
-			if (/^```+\s*pml\s*$/i.test(trimmed)) inBlock = true;
-			continue;
-		}
-		if (/^```+\s*$/.test(trimmed)) {
-			inBlock = false;
-			continue;
+		if (!wholeFile) {
+			const trimmed = line.text.trim();
+			if (!inBlock) {
+				if (/^```+\s*pml\s*$/i.test(trimmed)) inBlock = true;
+				continue;
+			}
+			if (/^```+\s*$/.test(trimmed)) {
+				inBlock = false;
+				continue;
+			}
 		}
 
 		let pos = line.from;
@@ -223,21 +245,93 @@ function buildPmlDecorations(view: EditorView, settings: PmlSettings): Decoratio
 	return builder.finish();
 }
 
-function createPmlViewPlugin(plugin: PmlHighlightPlugin) {
+function createPmlViewPlugin(plugin: PmlHighlightPlugin, wholeFile = false) {
 	return ViewPlugin.fromClass(
 		class {
 			decorations: DecorationSet;
 			constructor(view: EditorView) {
-				this.decorations = buildPmlDecorations(view, plugin.settings);
+				this.decorations = buildPmlDecorations(view, plugin.settings, wholeFile);
 			}
 			update(update: ViewUpdate) {
 				if (update.docChanged || update.viewportChanged) {
-					this.decorations = buildPmlDecorations(update.view, plugin.settings);
+					this.decorations = buildPmlDecorations(update.view, plugin.settings, wholeFile);
 				}
 			}
 		},
 		{ decorations: (v) => v.decorations }
 	);
+}
+
+/**
+ * Editable view for raw .pml/.pmlobj/.pmlfnc/.pmlfrm/.pmlmac/.pmlcmd files opened directly
+ * (not embedded in a Markdown note). A minimal CodeMirror 6 editor — history, default
+ * keybindings, line numbers — plus the same highlighting decorator used for fenced blocks,
+ * run in whole-file mode.
+ */
+class PmlFileView extends TextFileView {
+	private editorView: EditorView | null = null;
+	private plugin: PmlHighlightPlugin;
+
+	constructor(leaf: WorkspaceLeaf, plugin: PmlHighlightPlugin) {
+		super(leaf);
+		this.plugin = plugin;
+	}
+
+	getViewType(): string {
+		return PML_FILE_VIEW_TYPE;
+	}
+
+	getIcon(): string {
+		return "file-code";
+	}
+
+	async onOpen() {
+		this.editorView = new EditorView({
+			parent: this.contentEl,
+			state: EditorState.create({
+				doc: this.data,
+				extensions: [
+					lineNumbers(),
+					highlightActiveLine(),
+					history(),
+					keymap.of([...defaultKeymap, ...historyKeymap]),
+					createPmlViewPlugin(this.plugin, true),
+					EditorView.lineWrapping,
+					EditorView.updateListener.of((update) => {
+						if (update.docChanged) this.requestSave();
+					}),
+					EditorView.theme({
+						"&": { height: "100%" },
+						".cm-content": { fontFamily: "var(--font-monospace)", fontSize: "var(--font-text-size)" },
+						".cm-scroller": { overflow: "auto" },
+					}),
+				],
+			}),
+		});
+	}
+
+	async onClose() {
+		this.editorView?.destroy();
+		this.editorView = null;
+	}
+
+	getViewData(): string {
+		return this.editorView ? this.editorView.state.doc.toString() : this.data;
+	}
+
+	setViewData(data: string, _clear: boolean): void {
+		if (!this.editorView) return;
+		this.editorView.dispatch({
+			changes: { from: 0, to: this.editorView.state.doc.length, insert: data },
+		});
+	}
+
+	clear(): void {
+		if (!this.editorView) return;
+		this.editorView.dispatch({
+			changes: { from: 0, to: this.editorView.state.doc.length, insert: "" },
+		});
+	}
 }
 
 class PmlSettingTab extends PluginSettingTab {
@@ -267,6 +361,11 @@ class PmlSettingTab extends PluginSettingTab {
 				name: "Reading mode highlighting",
 				desc: "Highlight ```pml blocks in Reading mode. A note already open needs to be reopened (or toggled between Reading/Editing) to reflect the change.",
 				control: { type: "toggle", key: "enableReadingMode" },
+			},
+			{
+				name: "Raw PML file highlighting",
+				desc: "Highlight .pml, .pmlobj, .pmlfnc, .pmlfrm, .pmlmac and .pmlcmd files opened directly (not just fenced blocks in notes). Requires reopening any already-open file to apply.",
+				control: { type: "toggle", key: "enableFileHighlighting" },
 			},
 			{
 				type: "group",
@@ -342,6 +441,17 @@ export default class PmlHighlightPlugin extends Plugin {
 			renderPmlBlock(source, el, this.settings);
 		});
 		this.registerEditorExtension(createPmlViewPlugin(this));
+
+		this.registerView(PML_FILE_VIEW_TYPE, (leaf) => new PmlFileView(leaf, this));
+		try {
+			this.registerExtensions(PML_FILE_EXTENSIONS, PML_FILE_VIEW_TYPE);
+		} catch (e) {
+			// Another plugin may already own one of these extensions — the core editor still opens the file.
+		}
+	}
+
+	onunload() {
+		this.app.workspace.detachLeavesOfType(PML_FILE_VIEW_TYPE);
 	}
 
 	async loadSettings() {
