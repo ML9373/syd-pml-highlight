@@ -9,7 +9,7 @@ import {
 	lineNumbers,
 	highlightActiveLine,
 } from "@codemirror/view";
-import { EditorState, RangeSetBuilder, Text } from "@codemirror/state";
+import { Compartment, EditorState, RangeSetBuilder, Text } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { foldService, foldGutter, foldKeymap } from "@codemirror/language";
 
@@ -44,6 +44,16 @@ interface PmlSettings {
 	enableFileHighlighting: boolean;
 	/** Code folding for if/do/define/setup form/handle blocks, in fenced blocks and raw files alike. */
 	enableFolding: boolean;
+	/** Gutter line numbers when editing raw .pml-family files directly (fenced blocks use Obsidian's own editor gutter). */
+	showLineNumbers: boolean;
+	/** Size (em multiplier) and optional color override for the line-number gutter, raw files only. */
+	lineNumberSize: number;
+	lineNumberColor: TokenColorSetting;
+	/** Size (em multiplier) and optional color override for the fold-arrow gutter, raw files only. */
+	foldArrowSize: number;
+	foldArrowColor: TokenColorSetting;
+	/** Background color override for the gutter band (line numbers + fold arrows). Default blends with the Obsidian theme, overriding CodeMirror's own hardcoded light/dark gutter background. */
+	gutterBackgroundColor: TokenColorSetting;
 	/** Comma/newline-separated extra words to color as PML types (DB element types vary by module: 3D Design vs Unified Engineering). */
 	extraTypes: string;
 	colors: Record<TokenKey, TokenColorSetting>;
@@ -87,6 +97,12 @@ const DEFAULT_SETTINGS: PmlSettings = {
 	enableReadingMode: true,
 	enableFileHighlighting: true,
 	enableFolding: true,
+	showLineNumbers: true,
+	lineNumberSize: 1,
+	lineNumberColor: { enabled: false, color: "#888888" },
+	foldArrowSize: 1.25,
+	foldArrowColor: { enabled: false, color: "#888888" },
+	gutterBackgroundColor: { enabled: false, color: "#888888" },
 	extraTypes: "PIPE, EQUI, STRU, ZONE, SITE, FUNITE, ENGITE, PBSWLD, COLREL, ATTCOL, EXPCOL, SRCELE, DBVIEW, CRERUL",
 	colors: defaultColors(),
 };
@@ -349,6 +365,8 @@ function createPmlFoldService(plugin: PmlHighlightPlugin, wholeFile: boolean) {
 class PmlFileView extends TextFileView {
 	private editorView: EditorView | null = null;
 	private plugin: PmlHighlightPlugin;
+	private lineNumbersCompartment = new Compartment();
+	private foldGutterCompartment = new Compartment();
 
 	constructor(leaf: WorkspaceLeaf, plugin: PmlHighlightPlugin) {
 		super(leaf);
@@ -363,14 +381,50 @@ class PmlFileView extends TextFileView {
 		return "file-code";
 	}
 
+	/** Sets gutter size/color as CSS custom properties on contentEl — no injected stylesheet, per Obsidian plugin guidelines. */
+	private applyGutterStyleVars() {
+		const s = this.plugin.settings;
+		this.contentEl.style.setProperty("--pml-line-number-size", `${s.lineNumberSize}em`);
+		if (s.lineNumberColor.enabled) {
+			this.contentEl.style.setProperty("--pml-line-number-color", s.lineNumberColor.color);
+		} else {
+			this.contentEl.style.removeProperty("--pml-line-number-color");
+		}
+		this.contentEl.style.setProperty("--pml-fold-arrow-size", `${s.foldArrowSize}em`);
+		if (s.foldArrowColor.enabled) {
+			this.contentEl.style.setProperty("--pml-fold-arrow-color", s.foldArrowColor.color);
+		} else {
+			this.contentEl.style.removeProperty("--pml-fold-arrow-color");
+		}
+		if (s.gutterBackgroundColor.enabled) {
+			this.contentEl.style.setProperty("--pml-gutter-background", s.gutterBackgroundColor.color);
+		} else {
+			this.contentEl.style.removeProperty("--pml-gutter-background");
+		}
+	}
+
+	/** Re-applies gutter size/color vars and reconfigures the line-number/fold-arrow gutters live, without reopening the file. */
+	reconfigureGutters() {
+		if (!this.editorView) return;
+		this.applyGutterStyleVars();
+		this.editorView.dispatch({
+			effects: [
+				this.lineNumbersCompartment.reconfigure(this.plugin.settings.showLineNumbers ? [lineNumbers()] : []),
+				this.foldGutterCompartment.reconfigure(this.plugin.settings.enableFolding ? [foldGutter()] : []),
+			],
+		});
+	}
+
 	async onOpen() {
+		this.contentEl.addClass("pml-file-view");
+		this.applyGutterStyleVars();
 		this.editorView = new EditorView({
 			parent: this.contentEl,
 			state: EditorState.create({
 				doc: this.data,
 				extensions: [
-					lineNumbers(),
-					foldGutter(),
+					this.lineNumbersCompartment.of(this.plugin.settings.showLineNumbers ? [lineNumbers()] : []),
+					this.foldGutterCompartment.of(this.plugin.settings.enableFolding ? [foldGutter()] : []),
 					highlightActiveLine(),
 					history(),
 					keymap.of([...defaultKeymap, ...historyKeymap, ...foldKeymap]),
@@ -450,7 +504,149 @@ class PmlSettingTab extends PluginSettingTab {
 			{
 				name: "Code folding",
 				desc: "Fold if/endif, do/enddo, define method|function|object, setup form, and handle/endhandle blocks. Not covered: setup command and gadget blocks, which close with a generic 'exit' shared by several constructs.",
-				control: { type: "toggle", key: "enableFolding" },
+				render: (setting: Setting) => {
+					setting.addToggle((toggle) =>
+						toggle.setValue(this.plugin.settings.enableFolding).onChange(async (value) => {
+							this.plugin.settings.enableFolding = value;
+							await this.plugin.saveSettings();
+							this.app.workspace.updateOptions();
+							this.plugin.refreshFileViews();
+						})
+					);
+				},
+			},
+			{
+				name: "Line numbers (raw PML files)",
+				desc: "Show gutter line numbers when editing .pml, .pmlobj, .pmlfnc, .pmlfrm, .pmlmac and .pmlcmd files directly.",
+				render: (setting: Setting) => {
+					setting.addToggle((toggle) =>
+						toggle.setValue(this.plugin.settings.showLineNumbers).onChange(async (value) => {
+							this.plugin.settings.showLineNumbers = value;
+							await this.plugin.saveSettings();
+							this.plugin.refreshFileViews();
+						})
+					);
+				},
+			},
+			{
+				type: "group",
+				heading: "Gutter appearance (raw PML files)",
+				items: [
+					{
+						name: "About these settings",
+						desc: "Size and color for the line-number and fold-arrow gutter when editing raw .pml-family files.",
+					},
+					{
+						name: "Line number size",
+						render: (setting: Setting) => {
+							setting.addSlider((slider) =>
+								slider
+									.setLimits(0.75, 2, 0.05)
+									.setValue(this.plugin.settings.lineNumberSize)
+									.setDynamicTooltip()
+									.onChange(async (value) => {
+										this.plugin.settings.lineNumberSize = value;
+										await this.plugin.saveSettings();
+										this.plugin.refreshFileViews();
+									})
+							);
+						},
+					},
+					{
+						name: "Line number color",
+						desc: "Disabled = theme color.",
+						render: (setting: Setting) => {
+							setting.addToggle((toggle) =>
+								toggle.setValue(this.plugin.settings.lineNumberColor.enabled).onChange(async (value) => {
+									this.plugin.settings.lineNumberColor.enabled = value;
+									await this.plugin.saveSettings();
+									this.plugin.refreshFileViews();
+								})
+							);
+							setting.addColorPicker((picker) =>
+								picker.setValue(this.plugin.settings.lineNumberColor.color).onChange(async (value) => {
+									this.plugin.settings.lineNumberColor.color = value;
+									await this.plugin.saveSettings();
+									this.plugin.refreshFileViews();
+								})
+							);
+						},
+					},
+					{
+						name: "Fold arrow size",
+						render: (setting: Setting) => {
+							setting.addSlider((slider) =>
+								slider
+									.setLimits(0.75, 2, 0.05)
+									.setValue(this.plugin.settings.foldArrowSize)
+									.setDynamicTooltip()
+									.onChange(async (value) => {
+										this.plugin.settings.foldArrowSize = value;
+										await this.plugin.saveSettings();
+										this.plugin.refreshFileViews();
+									})
+							);
+						},
+					},
+					{
+						name: "Fold arrow color",
+						desc: "Disabled = theme color.",
+						render: (setting: Setting) => {
+							setting.addToggle((toggle) =>
+								toggle.setValue(this.plugin.settings.foldArrowColor.enabled).onChange(async (value) => {
+									this.plugin.settings.foldArrowColor.enabled = value;
+									await this.plugin.saveSettings();
+									this.plugin.refreshFileViews();
+								})
+							);
+							setting.addColorPicker((picker) =>
+								picker.setValue(this.plugin.settings.foldArrowColor.color).onChange(async (value) => {
+									this.plugin.settings.foldArrowColor.color = value;
+									await this.plugin.saveSettings();
+									this.plugin.refreshFileViews();
+								})
+							);
+						},
+					},
+					{
+						name: "Gutter background color",
+						desc: "Disabled = blends with the Obsidian theme (default). CodeMirror otherwise hardcodes a light-grey/dark-grey band regardless of your theme.",
+						render: (setting: Setting) => {
+							setting.addToggle((toggle) =>
+								toggle.setValue(this.plugin.settings.gutterBackgroundColor.enabled).onChange(async (value) => {
+									this.plugin.settings.gutterBackgroundColor.enabled = value;
+									await this.plugin.saveSettings();
+									this.plugin.refreshFileViews();
+								})
+							);
+							setting.addColorPicker((picker) =>
+								picker.setValue(this.plugin.settings.gutterBackgroundColor.color).onChange(async (value) => {
+									this.plugin.settings.gutterBackgroundColor.color = value;
+									await this.plugin.saveSettings();
+									this.plugin.refreshFileViews();
+								})
+							);
+						},
+					},
+					{
+						name: "Reset gutter appearance",
+						desc: "Revert size and color settings above to their defaults.",
+						render: (setting: Setting) => {
+							setting.addButton((button) =>
+								button.setButtonText("Reset").onClick(async () => {
+									this.plugin.settings.lineNumberSize = DEFAULT_SETTINGS.lineNumberSize;
+									this.plugin.settings.lineNumberColor = { ...DEFAULT_SETTINGS.lineNumberColor };
+									this.plugin.settings.foldArrowSize = DEFAULT_SETTINGS.foldArrowSize;
+									this.plugin.settings.foldArrowColor = { ...DEFAULT_SETTINGS.foldArrowColor };
+									this.plugin.settings.gutterBackgroundColor = { ...DEFAULT_SETTINGS.gutterBackgroundColor };
+									await this.plugin.saveSettings();
+									this.plugin.refreshFileViews();
+									this.update();
+								})
+							);
+						},
+					},
+				],
 			},
 			{
 				type: "group",
@@ -539,6 +735,13 @@ export default class PmlHighlightPlugin extends Plugin {
 		const loaded = (await this.loadData()) as Partial<PmlSettings> | null;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
 		this.settings.colors = Object.assign({}, defaultColors(), loaded?.colors);
+	}
+
+	/** Applies gutter setting changes to every already-open raw PML file view, no reopen needed. */
+	refreshFileViews() {
+		for (const leaf of this.app.workspace.getLeavesOfType(PML_FILE_VIEW_TYPE)) {
+			if (leaf.view instanceof PmlFileView) leaf.view.reconfigureGutters();
+		}
 	}
 
 	async saveSettings() {

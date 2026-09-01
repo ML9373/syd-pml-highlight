@@ -49,3 +49,25 @@
 .pml-operator {
 	color: var(--text-muted);
 }
+
+.pml-file-view .cm-gutters {
+	background-color: var(--pml-gutter-background, var(--background-primary));
+	color: var(--text-faint);
+	border-right: 1px solid var(--background-modifier-border);
+}
+
+.pml-file-view .cm-lineNumbers .cm-gutterElement {
+	font-size: var(--pml-line-number-size, 1em);
+	color: var(--pml-line-number-color, var(--text-faint));
+}
+
+.pml-file-view .cm-foldGutter span {
+	font-size: var(--pml-fold-arrow-size, 1.25em);
+	font-weight: 700;
+	color: var(--pml-fold-arrow-color, var(--text-muted));
+	padding: 0 4px;
+}
+
+.pml-file-view .cm-foldGutter span:hover {
+	color: var(--text-normal);
+}
